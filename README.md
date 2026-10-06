@@ -10,6 +10,10 @@ A Home Assistant Lovelace card for dynamic energy prices, styled after the Zonne
 - current electricity and (optional) gas price chips that open the more-info dialog
 - light and dark theme, Dutch and English labels (follows the HA language)
 
+| All prices | Cheapest 2 hours | Dragging |
+|---|---|---|
+| ![All prices](docs/all.png) | ![Cheapest block](docs/cheapest.png) | ![Scrub tooltip](docs/scrub.png) |
+
 Made for the [Zonneplan ONE](https://github.com/fsaris/home-assistant-zonneplan-one)
 integration's quarter-hourly tariff sensor, but it reads any sensor that exposes a list of
 price slots (see [Data sources](#data-sources)).
