@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeForecast, forecastFromAttributes, cheapestWindow, niceStep } from "../zonneplan-price-card.js";
+import { normalizeForecast, forecastFromAttributes, cheapestWindow, niceStep, aggregateHourly } from "../zonneplan-price-card.js";
 
 const Q = 15 * 60000;
 const H = 3600000;
@@ -88,4 +88,16 @@ test("niceStep keeps the grid to about four lines", () => {
   assert.equal(niceStep(62), 20);
   assert.equal(niceStep(15), 5);
   assert.equal(niceStep(150), 50);
+});
+
+test("aggregateHourly averages quarters into clock hours", () => {
+  const T = new Date(2026, 9, 6, 10, 0, 0).getTime(); // local 10:00
+  const slots = [10, 20, 30, 40, 50, 60, 70, 80].map((p, i) => ({ s: T + i * Q, e: T + (i + 1) * Q, p, px: p / 2 }));
+  const h = aggregateHourly(slots);
+  assert.equal(h.length, 2);
+  assert.deepEqual([h[0].s, h[0].e, h[0].p, h[0].px], [T, T + H, 25, 12.5]);
+  assert.equal(h[1].p, 65);
+  // a partial first hour keeps its real start; a missing px makes the hour's px null
+  const part = aggregateHourly([{ s: T + 2 * Q, e: T + 3 * Q, p: 5, px: null }, { s: T + 3 * Q, e: T + H, p: 15, px: 1 }]);
+  assert.deepEqual([part[0].s, part[0].p, part[0].px], [T + 2 * Q, 10, null]);
 });

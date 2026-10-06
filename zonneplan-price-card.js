@@ -6,7 +6,7 @@
 // integration, and with generic forecast attributes ({start, end, value}-style lists,
 // Nord Pool's raw_today/raw_tomorrow). See README.md for configuration.
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 const HOUR = 3600000;
 
@@ -27,6 +27,18 @@ const STRINGS = {
     incl: "Incl. belasting",
     excl: "Excl. belasting",
     noWindow: "Geen aaneengesloten blok gevonden",
+    view: "Weergave",
+    hours: "Uren",
+    quarters: "Kwartieren",
+    viewDesc: "Toon prijzen in de grafiek per kwartier of per uur. Stroomafrekening gebeurt altijd per kwartier.",
+    decimals: "Decimalen centen",
+    decimalsDesc: "Aantal cijfers achter de komma om prijsverschillen nauwkeuriger te bekijken.",
+    tax: "Energiebelasting",
+    taxDesc: "Weergave van prijzen met of zonder energiebelasting. Alleen van toepassing op de prijsgrafiek.",
+    remaining: "Resterende uren",
+    remainingDesc: "Toon het aantal resterende uren, bijvoorbeeld voor het instellen van een wasmachine of droger.",
+    horizonDesc: "Zoek het goedkoopste blok alleen binnen deze periode.",
+    hourShort: "u",
   },
   en: {
     title: "Energy prices",
@@ -44,6 +56,18 @@ const STRINGS = {
     incl: "Incl. tax",
     excl: "Excl. tax",
     noWindow: "No contiguous block found",
+    view: "View",
+    hours: "Hours",
+    quarters: "Quarters",
+    viewDesc: "Show prices per quarter or per hour. Electricity is always billed per quarter.",
+    decimals: "Decimals (cents)",
+    decimalsDesc: "Digits after the decimal point, to compare prices more precisely.",
+    tax: "Energy tax",
+    taxDesc: "Show prices with or without energy tax. Only applies to the price chart.",
+    remaining: "Remaining hours",
+    remainingDesc: "Show the number of hours from now, e.g. for setting a washing machine or dryer delay.",
+    horizonDesc: "Only search for the cheapest block within this period.",
+    hourShort: "h",
   },
 };
 
@@ -170,6 +194,29 @@ export function cheapestWindow(slots, hours, now, until = Infinity, key = "p") {
   return best;
 }
 
+/** Average slots into local clock hours (duration-weighted); partial hours keep their real span. */
+export function aggregateHourly(slots) {
+  const out = [];
+  let cur = null;
+  for (const sl of slots) {
+    const h = new Date(sl.s);
+    h.setMinutes(0, 0, 0);
+    const hs = h.getTime();
+    if (!cur || cur.h !== hs || cur.e !== sl.s) {
+      if (cur) out.push(cur);
+      cur = { h: hs, s: sl.s, e: sl.s, sum: 0, sumx: 0, dur: 0, hasx: true };
+    }
+    const d = sl.e - sl.s;
+    cur.sum += sl.p * d;
+    if (sl.px === null || sl.px === undefined) cur.hasx = false;
+    else cur.sumx += sl.px * d;
+    cur.dur += d;
+    cur.e = sl.e;
+  }
+  if (cur) out.push(cur);
+  return out.map((c) => ({ s: c.s, e: c.e, p: c.sum / c.dur, px: c.hasx ? c.sumx / c.dur : null }));
+}
+
 export function niceStep(range) {
   for (const s of [1, 2, 5, 10, 20, 25, 50, 100, 200, 500]) if (range / s <= 4) return s;
   return 1000;
@@ -182,7 +229,7 @@ export function niceStep(range) {
 const GREEN_DARK = "#2f9e44";
 const GREEN = "#40b25a";
 const GREEN_LIGHT = "#8fdc9b";
-const GREY_LINE = "#bdbdbd";
+const GREY_LINE = "#c4c4c4";
 
 function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -230,6 +277,15 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
           { name: "forecast_attribute", selector: { text: {} } },
           { name: "price_factor", selector: { number: { mode: "box", step: "any" } } },
           { name: "show_selector", selector: { boolean: {} } },
+          {
+            type: "grid",
+            name: "",
+            schema: [
+              { name: "view", selector: { select: { mode: "dropdown", options: ["quarter", "hour"] } } },
+              { name: "decimals", selector: { number: { min: 0, max: 2, step: 1, mode: "box" } } },
+              { name: "line_width", selector: { number: { min: 1, max: 4, step: 0.25, mode: "box", unit_of_measurement: "px" } } },
+            ],
+          },
         ],
         computeLabel: (s) =>
           ({
@@ -242,6 +298,9 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
             forecast_attribute: "Forecast attribute (auto-detected if empty)",
             price_factor: "Raw value × factor = cents (auto if empty)",
             show_selector: "Show cheapest-block selector",
+            view: "Default view (quarter / hour)",
+            decimals: "Default decimals",
+            line_width: "Line width",
           })[s.name],
       };
     }
@@ -312,10 +371,18 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
       return `zonneplan-price-card:${this._config.entity}`;
     }
     _loadPrefs() {
+      // Card config gives the defaults; what the viewer picks in the settings panel wins.
+      const defaults = {
+        horizon: 0,
+        tax: "incl",
+        view: this._config.view === "hour" ? "hour" : "quarter",
+        decimals: Math.min(2, Math.max(0, Number(this._config.decimals ?? 0) || 0)),
+        remaining: false,
+      };
       try {
-        return { horizon: 0, tax: "incl", ...JSON.parse(localStorage.getItem(this._prefsKey()) || "{}") };
+        return { ...defaults, ...JSON.parse(localStorage.getItem(this._prefsKey()) || "{}") };
       } catch (e) {
-        return { horizon: 0, tax: "incl" };
+        return defaults;
       }
     }
     _savePrefs() {
@@ -361,13 +428,37 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
           .cfg { border: 0; border-radius: 14px; background: rgba(127,127,127,.12); color: var(--primary-text-color);
                  width: 52px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
           .cfg.on { background: rgba(64,178,90,.2); }
-          .panel { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(127,127,127,.08);
-                   display: grid; gap: 8px; font-size: .9rem; color: var(--primary-text-color); }
-          .panel .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-          .panel .lbl { flex-basis: 100%; color: var(--secondary-text-color); font-size: .85rem; }
-          .pill { border: 1px solid var(--divider-color, rgba(127,127,127,.3)); background: transparent; color: inherit;
-                  border-radius: 999px; padding: 4px 10px; font: inherit; cursor: pointer; }
-          .pill.on { background: ${GREEN}; border-color: ${GREEN}; color: #fff; }
+          .panel { margin-top: 12px; display: grid; gap: 6px; color: var(--primary-text-color); }
+          .box { background: rgba(127,127,127,.08); border-radius: 16px; padding: 14px 16px; }
+          .srow { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 1rem; }
+          .desc { color: var(--secondary-text-color); font-size: .85rem; line-height: 1.35; padding: 0 4px 10px; }
+          .views { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+          .vopt { display: grid; gap: 8px; justify-items: center; background: none; border: 0; padding: 0; font: inherit;
+                  color: var(--primary-text-color); cursor: pointer; }
+          .vopt .pv { color: var(--primary-text-color); width: 100%; aspect-ratio: 16 / 10; border-radius: 12px; background: rgba(127,127,127,.1);
+                      border: 2px solid transparent; box-sizing: border-box; display: flex; }
+          .vopt.on .pv { border-color: ${GREEN}; background: transparent; }
+          .vopt .pv svg { width: 100%; height: 100%; }
+          .radio { display: inline-flex; align-items: center; gap: 8px; color: var(--secondary-text-color); }
+          .vopt.on .radio { color: var(--primary-text-color); }
+          .radio i { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--secondary-text-color);
+                     box-sizing: border-box; display: inline-block; }
+          .vopt.on .radio i { border-color: ${GREEN_DARK}; background: radial-gradient(${GREEN_DARK} 45%, transparent 50%); }
+          .dots { display: flex; gap: 6px; }
+          .dot { width: 32px; height: 32px; border-radius: 50%; border: 0; background: rgba(127,127,127,.14);
+                 color: var(--secondary-text-color); font: inherit; cursor: pointer; }
+          .dot.on { background: #6fd27f; color: #10301a; }
+          .sw { width: 50px; height: 30px; border-radius: 15px; border: 0; padding: 0; position: relative; cursor: pointer;
+                background: rgba(127,127,127,.3); transition: background .15s; flex: none; }
+          .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%;
+                       background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: left .15s; }
+          .sw.on { background: #6fd27f; }
+          .sw.on::after { left: 23px; }
+          .srow.wrap { flex-wrap: wrap; }
+          .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+          .pill { border: 0; background: rgba(127,127,127,.14); color: var(--secondary-text-color);
+                  border-radius: 999px; padding: 6px 12px; font: inherit; font-size: .9rem; cursor: pointer; }
+          .pill.on { background: #6fd27f; color: #10301a; }
           .hidden { display: none !important; }
           ha-card { --zpc-tip-bg: #222; --zpc-tip-fg: #fff; --zpc-seg-on: var(--card-background-color, #fff); }
           ha-card.dark { --zpc-tip-bg: #e9ecea; --zpc-tip-fg: #111; --zpc-seg-on: rgba(255,255,255,.16); }
@@ -461,8 +552,7 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
     }
 
     _fmt(ct) {
-      const d = Number(this._config.decimals ?? 0);
-      return `${ct.toFixed(d)} ct`;
+      return `${ct.toFixed(this._prefs.decimals)} ct`;
     }
 
     // ---- render --------------------------------------------------------------
@@ -511,42 +601,61 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
       const panel = r.querySelector(".panel");
       panel.classList.toggle("hidden", !this._panelOpen);
       if (!this._panelOpen) return;
-      const hz = [0, 6, 12, 24];
-      const hzBtns = hz
-        .map(
-          (h) =>
-            `<button class="pill ${this._prefs.horizon === h ? "on" : ""}" data-hz="${h}">${
-              h === 0 ? esc(this._t("horizonAll")) : `${h} ${esc(this._t("hour"))}`
-            }</button>`
+      const t = (k) => esc(this._t(k));
+      const pv = (bars) =>
+        bars
+          ? `<svg viewBox="0 0 160 100"><g fill="currentColor" opacity=".28">${[40, 38, 36, 42, 50, 52, 40, 30, 22, 28, 50, 76]
+              .map((h, i) => `<rect x="${16 + i * 11}" y="${84 - h}" width="6" height="${h}" rx="1"/>`)
+              .join("")}</g><g stroke="currentColor" opacity=".15"><line x1="14" x2="146" y1="18" y2="18"/><line x1="14" x2="146" y1="51" y2="51"/><line x1="14" x2="146" y1="84" y2="84"/></g></svg>`
+          : `<svg viewBox="0 0 160 100"><g stroke="currentColor" opacity=".15"><line x1="14" x2="146" y1="18" y2="18"/><line x1="14" x2="146" y1="51" y2="51"/><line x1="14" x2="146" y1="84" y2="84"/></g>
+             <path d="M14,58H20V62H26V58H32V60H38V56H44V58H50V52H58V44H64V48H72V46H78V52H84V58H90V64H96V70H104V76H110V72H116V66H124V54H130V40H136V30H142V22H146" fill="none" stroke="${GREEN}" stroke-width="2"/></svg>`;
+      const sw = (key, on) => `<button class="sw ${on ? "on" : ""}" data-sw="${key}" role="switch" aria-checked="${on}"></button>`;
+      let html = `
+        <div class="box"><div class="views">
+          <button class="vopt ${this._prefs.view === "hour" ? "on" : ""}" data-view="hour"><span class="pv">${pv(true)}</span><span class="radio"><i></i>${t("hours")}</span></button>
+          <button class="vopt ${this._prefs.view !== "hour" ? "on" : ""}" data-view="quarter"><span class="pv">${pv(false)}</span><span class="radio"><i></i>${t("quarters")}</span></button>
+        </div></div>
+        <div class="desc">${t("viewDesc")}</div>
+        <div class="box srow"><span>${t("decimals")}</span><span class="dots">${[0, 1, 2]
+          .map((d) => `<button class="dot ${this._prefs.decimals === d ? "on" : ""}" data-dec="${d}">${d}</button>`)
+          .join("")}</span></div>
+        <div class="desc">${t("decimalsDesc")}</div>`;
+      if (this._hasExcl) {
+        html += `<div class="box srow"><span>${t("tax")}</span>${sw("tax", this._prefs.tax !== "excl")}</div>
+          <div class="desc">${t("taxDesc")}</div>`;
+      }
+      html += `<div class="box srow"><span>${t("remaining")}</span>${sw("remaining", !!this._prefs.remaining)}</div>
+        <div class="desc">${t("remainingDesc")}</div>
+        <div class="box srow wrap"><span>${t("horizon")}</span><span class="pills">${[0, 6, 12, 24]
+          .map(
+            (h) =>
+              `<button class="pill ${this._prefs.horizon === h ? "on" : ""}" data-hz="${h}">${h === 0 ? t("horizonAll") : `${h}${t("hourShort")}`}</button>`
+          )
+          .join("")}</span></div>
+        <div class="desc">${t("horizonDesc")}</div>`;
+      panel.innerHTML = html;
+      const set = (patch) => {
+        Object.assign(this._prefs, patch);
+        this._savePrefs();
+        this._render();
+      };
+      panel.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => set({ view: b.dataset.view })));
+      panel.querySelectorAll("[data-dec]").forEach((b) => b.addEventListener("click", () => set({ decimals: Number(b.dataset.dec) })));
+      panel.querySelectorAll("[data-hz]").forEach((b) => b.addEventListener("click", () => set({ horizon: Number(b.dataset.hz) })));
+      panel.querySelectorAll("[data-sw]").forEach((b) =>
+        b.addEventListener("click", () =>
+          b.dataset.sw === "tax"
+            ? set({ tax: this._prefs.tax === "excl" ? "incl" : "excl" })
+            : set({ remaining: !this._prefs.remaining })
         )
-        .join("");
-      const taxRow = this._hasExcl
-        ? `<div class="row"><span class="lbl">${esc(this._t("prices"))}</span>
-             <button class="pill ${this._prefs.tax !== "excl" ? "on" : ""}" data-tax="incl">${esc(this._t("incl"))}</button>
-             <button class="pill ${this._prefs.tax === "excl" ? "on" : ""}" data-tax="excl">${esc(this._t("excl"))}</button></div>`
-        : "";
-      panel.innerHTML = `<div class="row"><span class="lbl">${esc(this._t("horizon"))}</span>${hzBtns}</div>${taxRow}`;
-      panel.querySelectorAll("[data-hz]").forEach((b) =>
-        b.addEventListener("click", () => {
-          this._prefs.horizon = Number(b.dataset.hz);
-          this._savePrefs();
-          this._renderControls();
-          this._renderChart();
-        })
-      );
-      panel.querySelectorAll("[data-tax]").forEach((b) =>
-        b.addEventListener("click", () => {
-          this._prefs.tax = b.dataset.tax;
-          this._savePrefs();
-          this._render();
-        })
       );
     }
 
     _renderChart() {
       const el = this._chartEl;
       if (!el || !this._hass) return;
-      const slots = this._data();
+      const bars = this._prefs.view === "hour";
+      const slots = bars ? aggregateHourly(this._data()) : this._data();
       const W = el.clientWidth || this._width || 360;
       this._width = W;
       const H = Number(this._config.height) || 260;
@@ -575,18 +684,24 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
       const step = niceStep(Math.max(vmax, 0) - Math.min(vmin, 0) || 1);
       const yLo = Math.min(0, Math.floor(vmin / step) * step);
       const yHi = Math.max(step, vmax + (vmax - yLo) * 0.06);
-      const X = (t) => padL + ((t - xStart) / (xEnd - xStart)) * pw;
-      const Y = (v) => padT + (1 - (v - yLo) / (yHi - yLo)) * ph;
+      // Snap to the device-pixel grid: the step line is all horizontal/vertical segments, and
+      // fractional coordinates are what made it look soft (anti-aliased over two pixels).
+      const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+      const snap = (v) => Math.round(v * dpr) / dpr;
+      const X = (t) => snap(padL + ((t - xStart) / (xEnd - xStart)) * pw);
+      const Y = (v) => snap(padT + (1 - (v - yLo) / (yHi - yLo)) * ph);
       const base = Y(0);
       const bottom = padT + ph;
 
       // Scrub position (computed early so the min/max labels can step aside).
       let scrub = null;
       if (this._scrubX !== null && this._scrubX !== undefined) {
-        const sx = Math.min(Math.max(this._scrubX, padL), padL + pw);
+        const sx = snap(Math.min(Math.max(this._scrubX, padL), padL + pw));
         const t = xStart + ((sx - padL) / pw) * (xEnd - xStart);
         const s = vis.find((v) => v.s <= t && t < v.e) || vis[vis.length - 1];
-        const label = hhmm(Math.max(s.s, xStart));
+        const label = this._prefs.remaining
+          ? `${hhmm(Math.max(s.s, xStart))} · ${this._relative(s.s, now)}`
+          : hhmm(Math.max(s.s, xStart));
         const value = this._fmt(price(s));
         scrub = { sx, s, label, value, box: this._tipBox(sx, label, W, value) };
       }
@@ -602,8 +717,8 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
           const x1 = X(Math.max(s.s, xStart));
           const x2 = X(s.e);
           const y = Y(price(s));
-          d += i === 0 ? `M${x1.toFixed(1)},${y.toFixed(1)}` : `L${x1.toFixed(1)},${y.toFixed(1)}`;
-          d += `L${x2.toFixed(1)},${y.toFixed(1)}`;
+          d += i === 0 ? `M${x1},${y}` : `L${x1},${y}`;
+          d += `L${x2},${y}`;
         });
         return d;
       };
@@ -611,8 +726,22 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
         if (!list.length) return "";
         const x1 = X(Math.max(list[0].s, xStart));
         const x2 = X(list[list.length - 1].e);
-        return `${stepPath(list)}L${x2.toFixed(1)},${base.toFixed(1)}L${x1.toFixed(1)},${base.toFixed(1)}Z`;
+        return `${stepPath(list)}L${x2},${base}L${x1},${base}Z`;
       };
+      // Hour view: one rounded bar per slot, coloured per slot.
+      const barRects = (list, color) =>
+        list
+          .map((sl) => {
+            const x1 = X(Math.max(sl.s, xStart));
+            const x2 = X(sl.e);
+            const gap = Math.min(3, (x2 - x1) * 0.3);
+            const y = Y(price(sl));
+            const top = Math.min(y, base);
+            const h = Math.max(1, Math.abs(base - y));
+            return `<rect x="${x1 + gap / 2}" y="${top}" width="${Math.max(1, x2 - x1 - gap)}" height="${h}" rx="${Math.min(2, (x2 - x1 - gap) / 2)}" fill="${color(sl)}"/>`;
+          })
+          .join("");
+      const level = (sl) => this._levelColor((price(sl) - vmin) / (vmax - vmin || 1));
       const clipSlots = (list, a, b) =>
         list.filter((s) => s.e > a && s.s < b).map((s) => ({ ...s, s: Math.max(s.s, a), e: Math.min(s.e, b) }));
 
@@ -625,7 +754,7 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
             <stop offset="0" stop-color="${GREEN_DARK}"/><stop offset="1" stop-color="${GREEN_LIGHT}"/>
           </linearGradient>
           <linearGradient id="zpc-fill" gradientUnits="userSpaceOnUse" x1="0" y1="${padT}" x2="0" y2="${bottom}">
-            <stop offset="0" stop-color="${GREEN}" stop-opacity=".22"/><stop offset="1" stop-color="${GREEN}" stop-opacity=".03"/>
+            <stop offset="0" stop-color="${GREEN}" stop-opacity=".18"/><stop offset="1" stop-color="${GREEN}" stop-opacity=".02"/>
           </linearGradient>
         </defs>`;
 
@@ -633,7 +762,7 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
       const gridColor = "var(--divider-color, rgba(127,127,127,.25))";
       const textColor = "var(--secondary-text-color, #777)";
       for (let v = yLo; v <= yHi + 1e-9; v += step) {
-        const y = Y(v);
+        const y = Y(v) + (dpr === 1 ? 0.5 : 0);
         svg += `<line x1="${padL - 6}" x2="${W - padR}" y1="${y}" y2="${y}" stroke="${gridColor}" stroke-width="1"/>`;
         svg += `<text x="${padL - 10}" y="${y + 4}" text-anchor="end" font-size="12" fill="${textColor}">${v}</text>`;
       }
@@ -659,10 +788,20 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
       // X axis ticks/labels
       const pxPerHour = pw / ((xEnd - xStart) / HOUR);
       const labelEvery = pxPerHour * 3 >= 30 ? 3 : pxPerHour * 6 >= 30 ? 6 : 12;
+      if (this._prefs.remaining) {
+        // Hours from now, for delay timers: "nu", +3, +6, ...
+        for (let k = 0, t = now; t <= xEnd; k++, t += HOUR) {
+          const x = X(t);
+          const major = k % labelEvery === 0;
+          if (!major && pxPerHour < 6) continue;
+          svg += `<line x1="${x}" x2="${x}" y1="${bottom + 4}" y2="${bottom + (major ? 10 : 8)}" stroke="${textColor}" stroke-width="1" opacity="${major ? 0.9 : 0.5}"/>`;
+          if (major) svg += `<text x="${x}" y="${bottom + 25}" text-anchor="middle" font-size="12" fill="${textColor}">${k === 0 ? esc(this._t("now")) : `+${k}`}</text>`;
+        }
+      }
       const h0 = new Date(xStart);
       h0.setMinutes(0, 0, 0);
       if (h0.getTime() < xStart) h0.setHours(h0.getHours() + 1);
-      for (let t = h0.getTime(); t <= xEnd; t += HOUR) {
+      for (let t = this._prefs.remaining ? Infinity : h0.getTime(); t <= xEnd; t += HOUR) {
         const hr = new Date(t).getHours();
         const x = X(t);
         const major = hr % labelEvery === 0;
@@ -673,33 +812,44 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
       svg += `<line x1="${padL - 6}" x2="${W - padR}" y1="${bottom}" y2="${bottom}" stroke="${gridColor}"/>`;
 
       // Series
-      const lineW = 2.2;
+      const lineW = Number(this._config.line_width) || 2;
+      const ln = `fill="none" stroke-width="${lineW}" stroke-linejoin="miter" stroke-linecap="butt"`;
       if (sel) {
         // Everything grey, selected block highlighted.
-        svg += `<path d="${stepPath(vis.map((s) => ({ ...s, s: Math.max(s.s, xStart) })))}" fill="none" stroke="${GREY_LINE}" stroke-width="${lineW}" stroke-linejoin="round"/>`;
         const blk = clipSlots(vis, sel.start, sel.end);
         const bx1 = X(sel.start);
         const bx2 = X(sel.end);
-        svg += `<path d="${areaPath(blk)}" fill="url(#zpc-fill)"/>`;
-        svg += `<path d="${stepPath(blk)}" fill="none" stroke="${GREEN}" stroke-width="${lineW + 0.6}" stroke-linejoin="round"/>`;
+        if (bars) {
+          svg += barRects(vis.filter((v) => v.e <= sel.start || v.s >= sel.end), () => GREY_LINE);
+          svg += barRects(blk, () => GREEN);
+        } else {
+          svg += `<path d="${stepPath(vis.map((v) => ({ ...v, s: Math.max(v.s, xStart) })))}" stroke="${GREY_LINE}" ${ln}/>`;
+          svg += `<path d="${areaPath(blk)}" fill="url(#zpc-fill)"/>`;
+          svg += `<path d="${stepPath(blk)}" stroke="${GREEN}" ${ln}/>`;
+        }
         // Bracket + tooltip
         const top = Y(Math.max(...blk.map(price))) - 8;
         const tipY = Math.max(4, top - 46);
-        svg += `<path d="M${bx1},${top + 8}V${top}H${bx2}V${top + 8}M${(bx1 + bx2) / 2},${top}V${tipY + 30}" fill="none" stroke="${textColor}" stroke-width="1.2" opacity=".8"/>`;
+        svg += `<path d="M${bx1},${top + 8}V${top}H${bx2}V${top + 8}M${snap((bx1 + bx2) / 2)},${top}V${tipY + 30}" fill="none" stroke="${textColor}" stroke-width="1" opacity=".8"/>`;
         const rel = this._relative(sel.start, now);
         const txt = `${hhmm(sel.start)} ${this._t("to")} ${hhmm(sel.end)}${lang.startsWith("nl") ? " uur" : ""} · ${rel} · ${this._fmt(sel.avg)}`;
         svg += this._tip((bx1 + bx2) / 2, tipY, txt, W);
       } else if (this._mode) {
-        svg += `<path d="${stepPath(vis)}" fill="none" stroke="${GREY_LINE}" stroke-width="${lineW}"/>`;
+        svg += bars ? barRects(vis, () => GREY_LINE) : `<path d="${stepPath(vis)}" stroke="${GREY_LINE}" ${ln}/>`;
         svg += this._tip(W / 2, 4, this._t("noWindow"), W);
       } else {
-        if (past.length) svg += `<path d="${stepPath(past)}" fill="none" stroke="${GREY_LINE}" stroke-width="${lineW}" stroke-linejoin="round"/>`;
-        if (future.length) {
-          svg += `<path d="${areaPath(future)}" fill="url(#zpc-fill)"/>`;
-          svg += `<path d="${stepPath(future)}" fill="none" stroke="url(#zpc-line)" stroke-width="${lineW + 0.4}" stroke-linejoin="round"/>`;
+        if (bars) {
+          svg += barRects(vis.filter((v) => v.e <= now), () => GREY_LINE);
+          svg += barRects(vis.filter((v) => v.e > now), level);
+        } else {
+          if (past.length) svg += `<path d="${stepPath(past)}" stroke="${GREY_LINE}" ${ln}/>`;
+          if (future.length) {
+            svg += `<path d="${areaPath(future)}" fill="url(#zpc-fill)"/>`;
+            svg += `<path d="${stepPath(future)}" stroke="url(#zpc-line)" ${ln}/>`;
+          }
         }
         // Min / max labels over the upcoming part.
-        const up = vis.filter((s) => s.e > now);
+        const up = vis.filter((v) => v.e > now);
         if (up.length) {
           const mx = up.reduce((a, b) => (price(b) > price(a) ? b : a));
           const mn = up.reduce((a, b) => (price(b) < price(a) ? b : a));
@@ -712,7 +862,7 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
       // Now marker
       const curSlot = vis.find((s) => s.s <= now && now < s.e);
       if (curSlot && !sel) {
-        svg += `<circle cx="${X(now)}" cy="${Y(price(curSlot))}" r="5.5" fill="var(--card-background-color, #fff)" stroke="${GREEN_DARK}" stroke-width="2.5"/>`;
+        svg += `<circle cx="${X(now)}" cy="${Y(price(curSlot))}" r="5" fill="var(--card-background-color, #fff)" stroke="${GREEN_DARK}" stroke-width="2"/>`;
       }
 
       // Scrub
@@ -720,8 +870,8 @@ if (typeof customElements !== "undefined" && !customElements.get("zonneplan-pric
         const { sx, s: sl } = scrub;
         const y = Y(price(sl));
         const frac = (price(sl) - vmin) / (vmax - vmin || 1);
-        svg += `<line x1="${sx}" x2="${sx}" y1="${padT - 12}" y2="${bottom}" stroke="${textColor}" stroke-width="2" opacity=".55"/>`;
-        svg += `<circle cx="${sx}" cy="${y}" r="5.5" fill="var(--card-background-color, #fff)" stroke="var(--primary-text-color, #111)" stroke-width="2.5"/>`;
+        svg += `<line x1="${sx}" x2="${sx}" y1="${padT - 12}" y2="${bottom}" stroke="${textColor}" stroke-width="1.5" opacity=".55"/>`;
+        svg += `<circle cx="${sx}" cy="${y}" r="5" fill="var(--card-background-color, #fff)" stroke="var(--primary-text-color, #111)" stroke-width="2"/>`;
         svg += this._tip(sx, 2, scrub.label, W, scrub.value, this._levelColor(frac));
       }
 

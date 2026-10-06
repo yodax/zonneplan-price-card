@@ -46,13 +46,25 @@ gas_entity: sensor.zonneplan_current_gas_tariff   # optional
 | `height` | `260` | Chart height in px |
 | `durations` | `[1, 2, 3, 4, 6]` | Block lengths (hours) offered by the cheapest-block selector |
 | `show_selector` | `true` | Show the cheapest-block selector |
-| `decimals` | `0` | Decimals for prices in cents |
+| `decimals` | `0` | Default decimals for prices in cents (0–2) |
+| `view` | `quarter` | Default view: `quarter` (step line) or `hour` (hourly-average bars) |
+| `line_width` | `2` | Width of the price line in px |
 | `forecast_attribute` | auto | Attribute holding the slot list |
 | `price_factor` | auto | Raw value × factor = cents. Auto: Zonneplan amounts are converted, values below 10 are treated as EUR/kWh |
 
-The ⚙ button next to the selector limits the search to the next 6/12/24 hours and switches
-between prices incl./excl. tax (when the source provides both). These choices are stored
-per browser.
+The ⚙ button next to the selector opens the chart settings, like the app's
+*Instellingen prijsgrafiek*:
+
+- **Uren / Kwartieren**: hourly-average bars or the 15-minute step line. The cheapest-block
+  search follows the view (whole hours in the hour view).
+- **Decimalen centen**: 0, 1 or 2 decimals.
+- **Energiebelasting**: prices with or without energy tax (when the source provides both).
+- **Resterende uren**: the time axis and the drag tooltip count hours from now, handy for a
+  washing machine or dryer delay timer.
+- **Zoeken binnen**: only search the next 6/12/24 hours for the cheapest block.
+
+These choices are stored per browser; `view` and `decimals` in the card config set the
+defaults.
 
 The card has a visual editor; all options are available there.
 
