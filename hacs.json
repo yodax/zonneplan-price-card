@@ -1,0 +1,6 @@
+{
+  "name": "Zonneplan Price Card",
+  "filename": "zonneplan-price-card.js",
+  "render_readme": true,
+  "homeassistant": "2024.8.0"
+}

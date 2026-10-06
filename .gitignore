@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.vscode/
+.DS_Store
+.env
+*.env
+!.env.example
+
+# Personal deploy/test tooling and notes, tied to one person's own infrastructure.
+# Kept local (backed up with the devbox home), never published.
+CLAUDE.local.md
+.claude/skills/deploy-*/
+.claude/settings.local.json
+deploy-local.sh
+docs/*.local.md
+.playwright-mcp/
+
+# Captured live API responses hold real account data. Sanitize into tests/fixtures/ by hand.
+capture/
+*-capture.json
+*-response.json
+.secrets/

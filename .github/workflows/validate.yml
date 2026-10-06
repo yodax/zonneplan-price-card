@@ -1,0 +1,38 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  validate-hacs:
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: HACS validation
+        uses: "hacs/action@main"
+        with:
+          category: "plugin"
+
+  # HACS shows the release tag; the card logs VERSION from the file. Keep them equal.
+  version:
+    name: "VERSION matches tag"
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: "ubuntu-latest"
+    permissions:
+      contents: read
+    steps:
+      - uses: "actions/checkout@v4"
+      - name: Compare VERSION to tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^export const VERSION = "\(.*\)";/\1/p' zonneplan-price-card.js)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::tag $TAG does not match VERSION $version"
+            exit 1
+          fi
